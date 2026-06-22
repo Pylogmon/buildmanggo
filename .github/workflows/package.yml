@@ -1,0 +1,188 @@
+name: Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: 6.8.3
+  ONNXRUNTIME_VERSION: 1.20.1
+  CONFIG: Release
+  CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux packages
+            os: ubuntu-24.04
+            formats: deb rpm
+            artifact_name: Manggo-linux
+          - name: Windows installer
+            os: windows-2022
+            formats: exe
+            artifact_name: Manggo-windows
+          - name: macOS Intel disk image
+            os: macos-15-intel
+            formats: dmg
+            artifact_name: Manggo-macos-intel
+          - name: macOS Apple Silicon disk image
+            os: macos-15
+            formats: dmg
+            artifact_name: Manggo-macos-apple-silicon
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            dpkg-dev \
+            libgl1-mesa-dev \
+            libopencv-dev \
+            libxcb-cursor0 \
+            libxkbcommon-x11-0 \
+            patchelf \
+            rpm
+
+      - name: Install Linux ONNX Runtime
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          onnxruntime_root="${GITHUB_WORKSPACE}/.deps/onnxruntime"
+          onnxruntime_archive="${RUNNER_TEMP}/onnxruntime-linux-x64.tgz"
+          onnxruntime_url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
+
+          mkdir -p "${onnxruntime_root}"
+          curl --location --fail --retry 3 --output "${onnxruntime_archive}" "${onnxruntime_url}"
+          tar -xzf "${onnxruntime_archive}" --strip-components=1 -C "${onnxruntime_root}"
+
+          echo "${onnxruntime_root}/lib" >> "${GITHUB_PATH}"
+          {
+            echo "CMAKE_PREFIX_PATH=${onnxruntime_root}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+            echo "LD_LIBRARY_PATH=${onnxruntime_root}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Install Windows packaging dependencies
+        if: runner.os == 'Windows'
+        run: choco install nsis opencv -y --no-progress
+
+      - name: Install Windows ONNX Runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $onnxRuntimeRoot = Join-Path $env:GITHUB_WORKSPACE ".deps\onnxruntime"
+          $onnxRuntimeArchive = Join-Path $env:RUNNER_TEMP "onnxruntime-win-x64.zip"
+          $onnxRuntimeUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$env:ONNXRUNTIME_VERSION/onnxruntime-win-x64-$env:ONNXRUNTIME_VERSION.zip"
+
+          New-Item -ItemType Directory -Force -Path $onnxRuntimeRoot | Out-Null
+          curl.exe --location --fail --retry 3 --output $onnxRuntimeArchive $onnxRuntimeUrl
+          Expand-Archive -Path $onnxRuntimeArchive -DestinationPath $env:RUNNER_TEMP -Force
+
+          $expandedRoot = Get-ChildItem -Path $env:RUNNER_TEMP -Directory |
+            Where-Object { $_.Name -like "onnxruntime-win-x64-*" } |
+            Select-Object -First 1
+          if (-not $expandedRoot) {
+            throw "ONNX Runtime archive did not contain the expected root directory."
+          }
+
+          Copy-Item -Path (Join-Path $expandedRoot.FullName "*") -Destination $onnxRuntimeRoot -Recurse -Force
+
+          $opencvRoot = "C:\tools\opencv\build"
+          $opencvBin = Join-Path $opencvRoot "x64\vc16\bin"
+          if (-not (Test-Path $opencvBin)) {
+            $opencvBin = Join-Path $opencvRoot "x64\vc17\bin"
+          }
+
+          "CMAKE_PREFIX_PATH=$opencvRoot;$onnxRuntimeRoot;$env:CMAKE_PREFIX_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $opencvBin | Out-File -FilePath $env:GITHUB_PATH -Append
+          (Join-Path $onnxRuntimeRoot "lib") | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install macOS Paddle OCR dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          brew install opencv onnxruntime
+
+          opencv_root="$(brew --prefix opencv)"
+          onnxruntime_root="$(brew --prefix onnxruntime)"
+
+          {
+            echo "${onnxruntime_root}/lib"
+            echo "${opencv_root}/lib"
+          } >> "${GITHUB_PATH}"
+          {
+            echo "CMAKE_PREFIX_PATH=${onnxruntime_root}:${opencv_root}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+            echo "DYLD_LIBRARY_PATH=${onnxruntime_root}/lib:${opencv_root}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Package Linux artifact
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BUILD_DIR: ${{ github.workspace }}/build/package
+          PACKAGE_DIR: ${{ github.workspace }}/dist/packages
+        run: ./script/package.sh ${{ matrix.formats }}
+
+      - name: Package macOS artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          BUILD_DIR: ${{ github.workspace }}/build/package
+          PACKAGE_DIR: ${{ github.workspace }}/dist/packages
+          MANGGO_MACOS_SIGN_IDENTITY: ${{ secrets.MANGGO_MACOS_SIGN_IDENTITY }}
+          MANGGO_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MANGGO_MACOS_CERTIFICATE_P12_BASE64 }}
+          MANGGO_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MANGGO_MACOS_CERTIFICATE_PASSWORD }}
+          MANGGO_MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MANGGO_MACOS_KEYCHAIN_PASSWORD }}
+          MANGGO_MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MANGGO_MACOS_NOTARY_KEY_P8_BASE64 }}
+          MANGGO_MACOS_NOTARY_KEY_ID: ${{ secrets.MANGGO_MACOS_NOTARY_KEY_ID }}
+          MANGGO_MACOS_NOTARY_ISSUER_ID: ${{ secrets.MANGGO_MACOS_NOTARY_ISSUER_ID }}
+          MANGGO_MACOS_NOTARY_APPLE_ID: ${{ secrets.MANGGO_MACOS_NOTARY_APPLE_ID }}
+          MANGGO_MACOS_NOTARY_PASSWORD: ${{ secrets.MANGGO_MACOS_NOTARY_PASSWORD }}
+          MANGGO_MACOS_NOTARY_TEAM_ID: ${{ secrets.MANGGO_MACOS_NOTARY_TEAM_ID }}
+        run: ./script/package.sh ${{ matrix.formats }}
+
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          BUILD_DIR: ${{ github.workspace }}\build\package
+          PACKAGE_DIR: ${{ github.workspace }}\dist\packages
+        run: .\script\package.ps1 ${{ matrix.formats }}
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            dist/packages/*.deb
+            dist/packages/*.dmg
+            dist/packages/*.exe
+            dist/packages/*.rpm
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
