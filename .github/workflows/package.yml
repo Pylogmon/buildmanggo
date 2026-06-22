@@ -44,6 +44,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          repository: Pylogmon/Manggo
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
