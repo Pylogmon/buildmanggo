@@ -12,7 +12,7 @@ concurrency:
 
 env:
   QT_VERSION: 6.8.3
-  ONNXRUNTIME_VERSION: 1.20.1
+  ONNXRUNTIME_VERSION: 1.22.1
   CONFIG: Release
   CMAKE_BUILD_PARALLEL_LEVEL: 4
 
@@ -33,11 +33,11 @@ jobs:
             formats: exe
             artifact_name: Manggo-windows
           - name: macOS Intel disk image
-            os: macos-15-intel
+            os: macos-13-intel
             formats: dmg
             artifact_name: Manggo-macos-intel
           - name: macOS Apple Silicon disk image
-            os: macos-15
+            os: macos-13
             formats: dmg
             artifact_name: Manggo-macos-apple-silicon
 
