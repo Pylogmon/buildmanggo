@@ -60,7 +60,7 @@ jobs:
 
       - name: Cache macOS Paddle OCR dependencies
         if: runner.os == 'macOS'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .deps/macos/${{ runner.arch }}
           key: macos-paddle-ocr-${{ runner.os }}-${{ runner.arch }}-target-${{ env.MACOSX_DEPLOYMENT_TARGET }}-opencv-${{ env.OPENCV_VERSION }}-onnxruntime-${{ env.ONNXRUNTIME_VERSION }}-${{ env.MACOS_DEPS_CACHE_VERSION }}
