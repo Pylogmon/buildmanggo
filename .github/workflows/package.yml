@@ -41,7 +41,7 @@ jobs:
             formats: dmg
             artifact_name: Manggo-macos-intel
           - name: macOS Apple Silicon disk image
-            os: macos-latest
+            os: macos-15
             formats: dmg
             artifact_name: Manggo-macos-apple-silicon
 
