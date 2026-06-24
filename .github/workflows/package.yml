@@ -12,7 +12,11 @@ concurrency:
 
 env:
   QT_VERSION: 6.8.3
+  OPENCV_VERSION: 4.10.0
   ONNXRUNTIME_VERSION: 1.22.0
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+  CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
+  MACOS_DEPS_CACHE_VERSION: v1
   CONFIG: Release
   CMAKE_BUILD_PARALLEL_LEVEL: 4
 
@@ -33,11 +37,11 @@ jobs:
             formats: exe
             artifact_name: Manggo-windows
           - name: macOS Intel disk image
-            os: macos-14-intel
+            os: macos-15-intel
             formats: dmg
             artifact_name: Manggo-macos-intel
           - name: macOS Apple Silicon disk image
-            os: macos-14
+            os: macos-latest
             formats: dmg
             artifact_name: Manggo-macos-apple-silicon
 
@@ -53,6 +57,13 @@ jobs:
         with:
           version: ${{ env.QT_VERSION }}
           cache: true
+
+      - name: Cache macOS Paddle OCR dependencies
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: .deps/macos/${{ runner.arch }}
+          key: macos-paddle-ocr-${{ runner.os }}-${{ runner.arch }}-target-${{ env.MACOSX_DEPLOYMENT_TARGET }}-opencv-${{ env.OPENCV_VERSION }}-onnxruntime-${{ env.ONNXRUNTIME_VERSION }}-${{ env.MACOS_DEPS_CACHE_VERSION }}
 
       - name: Install Linux packaging dependencies
         if: runner.os == 'Linux'
@@ -126,22 +137,7 @@ jobs:
       - name: Install macOS Paddle OCR dependencies
         if: runner.os == 'macOS'
         shell: bash
-        run: |
-          set -euo pipefail
-
-          brew install opencv onnxruntime
-
-          opencv_root="$(brew --prefix opencv)"
-          onnxruntime_root="$(brew --prefix onnxruntime)"
-
-          {
-            echo "${onnxruntime_root}/lib"
-            echo "${opencv_root}/lib"
-          } >> "${GITHUB_PATH}"
-          {
-            echo "CMAKE_PREFIX_PATH=${onnxruntime_root}:${opencv_root}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
-            echo "DYLD_LIBRARY_PATH=${onnxruntime_root}/lib:${opencv_root}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
-          } >> "${GITHUB_ENV}"
+        run: ./script/install-macos-deps.sh
 
       - name: Package Linux artifact
         if: runner.os == 'Linux'
@@ -168,6 +164,13 @@ jobs:
           MANGGO_MACOS_NOTARY_PASSWORD: ${{ secrets.MANGGO_MACOS_NOTARY_PASSWORD }}
           MANGGO_MACOS_NOTARY_TEAM_ID: ${{ secrets.MANGGO_MACOS_NOTARY_TEAM_ID }}
         run: ./script/package.sh ${{ matrix.formats }}
+
+      - name: Verify macOS deployment target
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          BUILD_DIR: ${{ github.workspace }}/build/package
+        run: ./script/verify-macos-deployment-target.sh "${MACOSX_DEPLOYMENT_TARGET}"
 
       - name: Package Windows artifact
         if: runner.os == 'Windows'
