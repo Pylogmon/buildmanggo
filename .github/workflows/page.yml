@@ -11,6 +11,9 @@ concurrency:
   group: cloudflare-pages-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CLOUDFLARE_PAGES_PROJECT_NAME: manggo-website
+
 jobs:
   deploy:
     name: Deploy Cloudflare Pages
@@ -26,11 +29,18 @@ jobs:
           repository: Pylogmon/Manggo
           token: ${{ secrets.TOKEN }}
 
+      - name: Create Pages project if missing
+        uses: cloudflare/wrangler-action@v4
+        continue-on-error: true
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages project create ${{ env.CLOUDFLARE_PAGES_PROJECT_NAME }} --production-branch=main
+
       - name: Deploy website
         id: deploy
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy website --project-name=manggo-website
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: pages deploy website --project-name=${{ env.CLOUDFLARE_PAGES_PROJECT_NAME }} --commit-dirty=true
