@@ -11,9 +11,6 @@ concurrency:
   group: cloudflare-pages-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || 'manggo' }}
-
 jobs:
   deploy:
     name: Deploy Cloudflare Pages
@@ -35,5 +32,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy website --project-name=${{ env.CLOUDFLARE_PAGES_PROJECT_NAME }}
-          gitHubToken: ${{ secrets.TOKEN }}
+          command: pages deploy website --project-name=manggo-website
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
