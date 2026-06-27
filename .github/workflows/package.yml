@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  QT_VERSION: 6.11.1
+  QT_VERSION: 6.8.3
   OPENCV_VERSION: 4.10.0
   ONNXRUNTIME_VERSION: 1.22.0
   MACOSX_DEPLOYMENT_TARGET: "14.0"
@@ -50,6 +50,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Pylogmon/Manggo
+          ref: "089b70cfb354ac5086dfb45e5a86685aab4efdb5"
           token: ${{ secrets.TOKEN }}
 
       - name: Install Qt
