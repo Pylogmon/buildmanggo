@@ -180,6 +180,9 @@ jobs:
           PACKAGE_DIR: ${{ github.workspace }}\dist\packages
         run: .\script\package.ps1 ${{ matrix.formats }}
 
+      - name: Write package metadata
+        run: cmake -P script/write-package-metadata.cmake
+
       - name: Upload packages
         uses: actions/upload-artifact@v7
         with:
@@ -189,6 +192,9 @@ jobs:
             dist/packages/*.dmg
             dist/packages/*.exe
             dist/packages/*.rpm
+            dist/packages/SHA256SUMS
+            dist/packages/SIZES
+            dist/packages/package-metadata.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
