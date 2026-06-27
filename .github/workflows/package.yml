@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Pylogmon/Manggo
-          ref: "089b70cfb354ac5086dfb45e5a86685aab4efdb5"
+          ref: "05077b1e9c562571feb1c5a85d67b8f4e45fedb0"
           token: ${{ secrets.TOKEN }}
 
       - name: Install Qt
