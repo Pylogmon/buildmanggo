@@ -56,7 +56,9 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
+          modules: qtmultimedia
           cache: true
+          cache-key-prefix: install-qt-action-qtmultimedia
 
       - name: Cache macOS Paddle OCR dependencies
         if: runner.os == 'macOS'
