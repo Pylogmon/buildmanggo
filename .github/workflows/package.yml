@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  QT_VERSION: 6.9.*
+  QT_VERSION: 6.9.3
   OPENCV_VERSION: 4.10.0
   ONNXRUNTIME_VERSION: 1.22.0
   MACOSX_DEPLOYMENT_TARGET: "14.0"
@@ -77,6 +77,12 @@ jobs:
             libgl1-mesa-dev \
             libopencv-dev \
             libxcb-cursor0 \
+            libxcb-xinput-dev \
+            libxcb-randr0-dev \
+            libxcb-res0-dev \
+            libxcb-xtest0-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
             libxkbcommon-x11-0 \
             patchelf \
             rpm
