@@ -28,14 +28,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux packages x64
+          - name: Linux x64 packages
             os: ubuntu-24.04
+            qt_host: linux
+            qt_arch: linux_gcc_64
+            onnxruntime_arch: x64
             formats: deb rpm
-            artifact_name: Manggo-linux-x64
-          - name: Linux packages arm
+            artifact_name: Manggo-linux
+          - name: Linux ARM64 packages
             os: ubuntu-24.04-arm
+            qt_host: linux_arm64
+            qt_arch: linux_gcc_arm64
+            onnxruntime_arch: aarch64
             formats: deb rpm
-            artifact_name: Manggo-linux-arm
+            artifact_name: Manggo-linux-arm64
           - name: Windows installer
             os: windows-2022
             formats: exe
@@ -60,6 +66,8 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
+          host: ${{ matrix.qt_host }}
+          arch: ${{ matrix.qt_arch }}
           modules: qtmultimedia
           cache: true
           cache-key-prefix: install-qt-action-qtmultimedia
@@ -85,6 +93,7 @@ jobs:
             libxcb-randr0-dev \
             libxcb-res0-dev \
             libxcb-xtest0-dev \
+            libxcb-xfixes0-dev \
             libwayland-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-0 \
@@ -94,12 +103,14 @@ jobs:
       - name: Install Linux ONNX Runtime
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          ONNXRUNTIME_ARCH: ${{ matrix.onnxruntime_arch }}
         run: |
           set -euo pipefail
 
           onnxruntime_root="${GITHUB_WORKSPACE}/.deps/onnxruntime"
-          onnxruntime_archive="${RUNNER_TEMP}/onnxruntime-linux-x64.tgz"
-          onnxruntime_url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
+          onnxruntime_archive="${RUNNER_TEMP}/onnxruntime-linux-${ONNXRUNTIME_ARCH}.tgz"
+          onnxruntime_url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}.tgz"
 
           mkdir -p "${onnxruntime_root}"
           curl --location --fail --retry 3 --output "${onnxruntime_archive}" "${onnxruntime_url}"
