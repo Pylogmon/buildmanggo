@@ -28,10 +28,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux packages
+          - name: Linux packages x64
             os: ubuntu-24.04
             formats: deb rpm
-            artifact_name: Manggo-linux
+            artifact_name: Manggo-linux-x64
+          - name: Linux packages arm
+            os: ubuntu-24.04-arm
+            formats: deb rpm
+            artifact_name: Manggo-linux-arm
           - name: Windows installer
             os: windows-2022
             formats: exe
