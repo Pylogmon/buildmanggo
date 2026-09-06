@@ -68,9 +68,10 @@ jobs:
           version: ${{ env.QT_VERSION }}
           host: ${{ matrix.qt_host }}
           arch: ${{ matrix.qt_arch }}
-          modules: ${{ runner.os == 'Linux' && 'qtmultimedia qtwayland' || 'qtmultimedia' }}
+          # Qt 6.9 includes qtwayland in the base Linux SDK, not as an aqt add-on.
+          modules: qtmultimedia
           cache: true
-          cache-key-prefix: install-qt-action-qtmultimedia-wayland-v1
+          cache-key-prefix: install-qt-action-qtmultimedia-v2
 
       - name: Cache macOS Paddle OCR dependencies
         if: runner.os == 'macOS'
