@@ -85,7 +85,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build/deps/linux-opencv
-          key: linux-opencv-ubuntu-24.04-${{ runner.arch }}-${{ env.OPENCV_VERSION }}-${{ hashFiles('script/install-linux-opencv.sh') }}
+          key: linux-opencv-ubuntu-24.04-${{ runner.arch }}-${{ env.OPENCV_VERSION }}-${{ hashFiles('script/install-linux-opencv.sh', 'tests/OpenCVStaticProbe/**') }}
 
       - name: Install Linux packaging dependencies
         if: runner.os == 'Linux'
