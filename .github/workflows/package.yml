@@ -80,6 +80,13 @@ jobs:
           path: .deps/macos/${{ runner.arch }}
           key: macos-paddle-ocr-${{ runner.os }}-${{ runner.arch }}-target-${{ env.MACOSX_DEPLOYMENT_TARGET }}-opencv-${{ env.OPENCV_VERSION }}-onnxruntime-${{ env.ONNXRUNTIME_VERSION }}-${{ env.MACOS_DEPS_CACHE_VERSION }}
 
+      - name: Cache Linux static OpenCV
+        if: runner.os == 'Linux'
+        uses: actions/cache@v6
+        with:
+          path: build/deps/linux-opencv
+          key: linux-opencv-ubuntu-24.04-${{ runner.arch }}-${{ env.OPENCV_VERSION }}-${{ hashFiles('script/install-linux-opencv.sh') }}
+
       - name: Install Linux packaging dependencies
         if: runner.os == 'Linux'
         run: |
@@ -91,7 +98,6 @@ jobs:
             libgl1-mesa-dev \
             libgstreamer-plugins-bad1.0-0 \
             libgstreamer-plugins-good1.0-0 \
-            libopencv-dev \
             libxcb-cursor0 \
             libxcb-xinput-dev \
             libxcb-randr0-dev \
@@ -178,47 +184,26 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          # A fresh image cannot borrow OpenCV or Qt from the build runner.
+          # Fresh images cannot borrow OpenCV or Qt from the build runner.
           docker run --rm \
             --volume "${GITHUB_WORKSPACE}/dist/packages:/packages:ro" \
+            --volume "${GITHUB_WORKSPACE}/script/verify-linux-package.sh:/verify-linux-package.sh:ro" \
             ubuntu:24.04 bash -euo pipefail -c '
               apt-get update
               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /packages/*.deb
+              bash /verify-linux-package.sh deb
+            '
 
-              check_dependencies() {
-                local binary="$1" dependencies
-                dependencies="$(ldd "$binary")"
-                printf "%s:\n%s\n" "$binary" "$dependencies"
-                if [[ "$dependencies" == *"not found"* ]]; then
-                  echo "Unresolved runtime dependencies in $binary." >&2
-                  exit 1
-                fi
-              }
-
-              check_dependencies /usr/bin/Manggo
-              xcb_plugin_found=false
-              wayland_plugin_found=false
-              wayland_shell_found=false
-              while IFS= read -r installed_file; do
-                if [[ "$installed_file" == */plugins/*.so && -f "$installed_file" ]]; then
-                  check_dependencies "$installed_file"
-                  if [[ "$installed_file" == */platforms/libqxcb.so ]]; then
-                    xcb_plugin_found=true
-                  elif [[ "$installed_file" == */platforms/libqwayland-generic.so ]]; then
-                    wayland_plugin_found=true
-                  elif [[ "$installed_file" == */wayland-shell-integration/libxdg-shell.so ]]; then
-                    wayland_shell_found=true
-                  fi
-                fi
-              done < <(dpkg-query --listfiles manggo)
-              if [[ "$xcb_plugin_found" != true ]]; then
-                echo "The installed DEB is missing the Qt XCB platform plugin." >&2
-                exit 1
-              fi
-              if [[ "$wayland_plugin_found" != true || "$wayland_shell_found" != true ]]; then
-                echo "The installed DEB is missing the Qt Wayland platform or XDG shell plugin." >&2
-                exit 1
-              fi
+      - name: Verify Linux RPM on Fedora 44
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}/dist/packages:/packages:ro" \
+            --volume "${GITHUB_WORKSPACE}/script/verify-linux-package.sh:/verify-linux-package.sh:ro" \
+            fedora:44 bash -euo pipefail -c '
+              dnf install -y --setopt=install_weak_deps=False /packages/*.rpm
+              bash /verify-linux-package.sh rpm
             '
 
       - name: Package macOS artifact
