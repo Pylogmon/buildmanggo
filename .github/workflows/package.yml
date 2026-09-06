@@ -68,9 +68,9 @@ jobs:
           version: ${{ env.QT_VERSION }}
           host: ${{ matrix.qt_host }}
           arch: ${{ matrix.qt_arch }}
-          modules: qtmultimedia
+          modules: ${{ runner.os == 'Linux' && 'qtmultimedia qtwayland' || 'qtmultimedia' }}
           cache: true
-          cache-key-prefix: install-qt-action-qtmultimedia
+          cache-key-prefix: install-qt-action-qtmultimedia-wayland-v1
 
       - name: Cache macOS Paddle OCR dependencies
         if: runner.os == 'macOS'
@@ -83,10 +83,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+          # Qt's GStreamer plugin needs libgstplay (bad) and libgstphotography (good).
           sudo apt-get install -y \
             build-essential \
             dpkg-dev \
             libgl1-mesa-dev \
+            libgstreamer-plugins-bad1.0-0 \
+            libgstreamer-plugins-good1.0-0 \
             libopencv-dev \
             libxcb-cursor0 \
             libxcb-xinput-dev \
@@ -169,6 +172,53 @@ jobs:
           BUILD_DIR: ${{ github.workspace }}/build/package
           PACKAGE_DIR: ${{ github.workspace }}/dist/packages
         run: ./script/package.sh ${{ matrix.formats }}
+
+      - name: Verify Linux DEB runtime dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # A fresh image cannot borrow OpenCV or Qt from the build runner.
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}/dist/packages:/packages:ro" \
+            ubuntu:24.04 bash -euo pipefail -c '
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /packages/*.deb
+
+              check_dependencies() {
+                local binary="$1" dependencies
+                dependencies="$(ldd "$binary")"
+                printf "%s:\n%s\n" "$binary" "$dependencies"
+                if [[ "$dependencies" == *"not found"* ]]; then
+                  echo "Unresolved runtime dependencies in $binary." >&2
+                  exit 1
+                fi
+              }
+
+              check_dependencies /usr/bin/Manggo
+              xcb_plugin_found=false
+              wayland_plugin_found=false
+              wayland_shell_found=false
+              while IFS= read -r installed_file; do
+                if [[ "$installed_file" == */plugins/*.so && -f "$installed_file" ]]; then
+                  check_dependencies "$installed_file"
+                  if [[ "$installed_file" == */platforms/libqxcb.so ]]; then
+                    xcb_plugin_found=true
+                  elif [[ "$installed_file" == */platforms/libqwayland-generic.so ]]; then
+                    wayland_plugin_found=true
+                  elif [[ "$installed_file" == */wayland-shell-integration/libxdg-shell.so ]]; then
+                    wayland_shell_found=true
+                  fi
+                fi
+              done < <(dpkg-query --listfiles manggo)
+              if [[ "$xcb_plugin_found" != true ]]; then
+                echo "The installed DEB is missing the Qt XCB platform plugin." >&2
+                exit 1
+              fi
+              if [[ "$wayland_plugin_found" != true || "$wayland_shell_found" != true ]]; then
+                echo "The installed DEB is missing the Qt Wayland platform or XDG shell plugin." >&2
+                exit 1
+              fi
+            '
 
       - name: Package macOS artifact
         if: runner.os == 'macOS'
