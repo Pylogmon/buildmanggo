@@ -34,6 +34,9 @@ jobs:
             qt_arch: linux_gcc_64
             onnxruntime_arch: x64
             formats: deb rpm
+            # Packages accept the build image's glibc and newer releases.
+            linux_build_image: ubuntu:22.04
+            linux_deb_test_images: ubuntu:22.04 ubuntu:24.04
             artifact_name: Manggo-linux
           - name: Linux ARM64 packages
             os: ubuntu-24.04-arm
@@ -41,6 +44,9 @@ jobs:
             qt_arch: linux_gcc_arm64
             onnxruntime_arch: aarch64
             formats: deb rpm
+            # Qt's ARM64 binaries are built on Ubuntu 24.04 and need glibc 2.38.
+            linux_build_image: ubuntu:24.04
+            linux_deb_test_images: ubuntu:24.04
             artifact_name: Manggo-linux-arm64
           - name: Windows installer
             os: windows-2022
@@ -85,31 +91,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build/deps/linux-opencv
-          key: linux-opencv-ubuntu-24.04-${{ runner.arch }}-${{ env.OPENCV_VERSION }}-${{ hashFiles('script/install-linux-opencv.sh', 'tests/OpenCVStaticProbe/**') }}
-
-      - name: Install Linux packaging dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          # Qt's GStreamer plugin needs libgstplay (bad) and libgstphotography (good).
-          sudo apt-get install -y \
-            build-essential \
-            dpkg-dev \
-            libbz2-1.0 \
-            libgl1-mesa-dev \
-            libgstreamer-plugins-bad1.0-0 \
-            libgstreamer-plugins-good1.0-0 \
-            libxcb-cursor0 \
-            libxcb-xinput-dev \
-            libxcb-randr0-dev \
-            libxcb-res0-dev \
-            libxcb-xtest0-dev \
-            libxcb-xfixes0-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-0 \
-            patchelf \
-            rpm
+          key: linux-opencv-${{ matrix.linux_build_image }}-${{ runner.arch }}-${{ env.OPENCV_VERSION }}-${{ hashFiles('script/install-linux-opencv.sh', 'tests/OpenCVStaticProbe/**') }}
 
       - name: Install Linux ONNX Runtime
         if: runner.os == 'Linux'
@@ -135,7 +117,14 @@ jobs:
 
       - name: Install Windows packaging dependencies
         if: runner.os == 'Windows'
-        run: choco install nsis opencv -y --no-progress
+        run: choco install nsis -y --no-progress
+
+      - name: Cache Windows static OpenCV
+        if: runner.os == 'Windows'
+        uses: actions/cache@v6
+        with:
+          path: build/deps/windows-opencv
+          key: windows-opencv-windows-2022-${{ runner.arch }}-${{ env.OPENCV_VERSION }}-${{ hashFiles('script/install-windows-opencv.ps1', 'tests/OpenCVStaticProbe/**') }}
 
       - name: Install Windows ONNX Runtime
         if: runner.os == 'Windows'
@@ -158,14 +147,7 @@ jobs:
 
           Copy-Item -Path (Join-Path $expandedRoot.FullName "*") -Destination $onnxRuntimeRoot -Recurse -Force
 
-          $opencvRoot = "C:\tools\opencv\build"
-          $opencvBin = Join-Path $opencvRoot "x64\vc16\bin"
-          if (-not (Test-Path $opencvBin)) {
-            $opencvBin = Join-Path $opencvRoot "x64\vc17\bin"
-          }
-
-          "CMAKE_PREFIX_PATH=$opencvRoot;$onnxRuntimeRoot;$env:CMAKE_PREFIX_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
-          $opencvBin | Out-File -FilePath $env:GITHUB_PATH -Append
+          "CMAKE_PREFIX_PATH=$onnxRuntimeRoot;$env:CMAKE_PREFIX_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
           (Join-Path $onnxRuntimeRoot "lib") | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Install macOS Paddle OCR dependencies
@@ -179,21 +161,37 @@ jobs:
         env:
           BUILD_DIR: ${{ github.workspace }}/build/package
           PACKAGE_DIR: ${{ github.workspace }}/dist/packages
-        run: ./script/package.sh ${{ matrix.formats }}
+          MANGGO_LINUX_BUILD_IMAGE: ${{ matrix.linux_build_image }}
+        # The toolchain and system libraries come from the build image, not
+        # the runner, so the runner's newer glibc cannot leak into packages.
+        run: ./script/package-linux-container.sh ./script/package.sh ${{ matrix.formats }}
+
+      - name: Verify Linux installation isolation
+        if: runner.os == 'Linux'
+        env:
+          MANGGO_LINUX_BUILD_IMAGE: ${{ matrix.linux_build_image }}
+        run: ./script/package-linux-container.sh ctest --test-dir build/package -R '^ManggoLinuxInstallLayoutTests$' --output-on-failure
 
       - name: Verify Linux DEB runtime dependencies
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          DEB_TEST_IMAGES: ${{ matrix.linux_deb_test_images }}
         run: |
-          # Fresh images cannot borrow OpenCV or Qt from the build runner.
-          docker run --rm \
-            --volume "${GITHUB_WORKSPACE}/dist/packages:/packages:ro" \
-            --volume "${GITHUB_WORKSPACE}/script/verify-linux-package.sh:/verify-linux-package.sh:ro" \
-            ubuntu:24.04 bash -euo pipefail -c '
-              apt-get update
-              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /packages/*.deb
-              bash /verify-linux-package.sh deb
-            '
+          # Fresh images cannot borrow OpenCV or Qt from the build runner. The
+          # oldest image also proves that the package accepts its glibc.
+          for image in ${DEB_TEST_IMAGES}; do
+            echo "::group::${image}"
+            docker run --rm \
+              --volume "${GITHUB_WORKSPACE}/dist/packages:/packages:ro" \
+              --volume "${GITHUB_WORKSPACE}/script/verify-linux-package.sh:/verify-linux-package.sh:ro" \
+              "${image}" bash -euo pipefail -c '
+                apt-get update
+                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /packages/*.deb
+                bash /verify-linux-package.sh deb
+              '
+            echo "::endgroup::"
+          done
 
       - name: Verify Linux RPM on Fedora 44
         if: runner.os == 'Linux'
@@ -225,6 +223,11 @@ jobs:
           MANGGO_MACOS_NOTARY_TEAM_ID: ${{ secrets.MANGGO_MACOS_NOTARY_TEAM_ID }}
         run: ./script/package.sh ${{ matrix.formats }}
 
+      - name: Verify macOS architecture packaging
+        if: runner.os == 'macOS'
+        shell: bash
+        run: cmake -DMANGGO_TEST_BINARY_DIR="${GITHUB_WORKSPACE}/build/macos-package-tests" -P cmake/macos/tests/ThinBundleArchitecturesTest.cmake
+
       - name: Verify macOS deployment target
         if: runner.os == 'macOS'
         shell: bash
@@ -239,6 +242,19 @@ jobs:
           BUILD_DIR: ${{ github.workspace }}\build\package
           PACKAGE_DIR: ${{ github.workspace }}\dist\packages
         run: .\script\package.ps1 ${{ matrix.formats }}
+
+      - name: Verify Windows deployment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stagedApps = @(Get-ChildItem dist/packages/_CPack_Packages -Recurse -File -Filter Manggo.exe)
+          if ($stagedApps.Count -ne 1) { throw "Expected one staged application." }
+          $stagedBin = $stagedApps[0].DirectoryName
+          foreach ($testName in @('ManggoWindowsDeploymentProbe', 'ManggoI18nTests')) {
+            $probes = @(Get-ChildItem build/package -Recurse -File -Filter "$testName.exe")
+            if ($probes.Count -ne 1) { throw "Expected one $testName executable." }
+            & ./tests/WindowsDeploymentProbe/Run-StagedProbe.ps1 -Probe $probes[0].FullName -StagedBin $stagedBin -Ocr:($testName -eq 'ManggoWindowsDeploymentProbe')
+          }
 
       - name: Write package metadata
         run: cmake -P script/write-package-metadata.cmake
