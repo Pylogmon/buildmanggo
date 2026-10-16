@@ -77,7 +77,7 @@ jobs:
           # Qt 6.9 includes qtwayland in the base Linux SDK, not as an aqt add-on.
           modules: qtmultimedia
           cache: true
-          cache-key-prefix: install-qt-action-qtmultimedia-v2
+          cache-key-prefix: install-qt-action-multimedia-websockets-v3
 
       - name: Cache macOS Paddle OCR dependencies
         if: runner.os == 'macOS'
