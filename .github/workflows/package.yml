@@ -166,11 +166,11 @@ jobs:
         # the runner, so the runner's newer glibc cannot leak into packages.
         run: ./script/package-linux-container.sh ./script/package.sh ${{ matrix.formats }}
 
-      - name: Verify Linux installation isolation
+      - name: Verify Linux installation isolation and ASR staging
         if: runner.os == 'Linux'
         env:
           MANGGO_LINUX_BUILD_IMAGE: ${{ matrix.linux_build_image }}
-        run: ./script/package-linux-container.sh ctest --test-dir build/package -R '^ManggoLinuxInstallLayoutTests$' --output-on-failure
+        run: ./script/package-linux-container.sh ctest --test-dir build/package -R '^Manggo(LinuxInstallLayout|AsrStaging)Tests$' --output-on-failure
 
       - name: Verify Linux DEB runtime dependencies
         if: runner.os == 'Linux'
