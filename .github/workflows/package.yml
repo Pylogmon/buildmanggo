@@ -75,9 +75,9 @@ jobs:
           host: ${{ matrix.qt_host }}
           arch: ${{ matrix.qt_arch }}
           # Qt 6.9 includes qtwayland in the base Linux SDK, not as an aqt add-on.
-          modules: qtmultimedia
+          modules: qtmultimedia qtwebsockets
           cache: true
-          cache-key-prefix: install-qt-action-multimedia-websockets-v3
+          cache-key-prefix: install-qt-action-multimedia-websockets-v4
 
       - name: Cache macOS Paddle OCR dependencies
         if: runner.os == 'macOS'
@@ -247,6 +247,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          & ctest --test-dir build/package -C $env:CONFIG -R '^ManggoUpdateServiceTests$' --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw 'Windows update launcher regression tests failed.' }
           $stagedApps = @(Get-ChildItem dist/packages/_CPack_Packages -Recurse -File -Filter Manggo.exe)
           if ($stagedApps.Count -ne 1) { throw "Expected one staged application." }
           $stagedBin = $stagedApps[0].DirectoryName
