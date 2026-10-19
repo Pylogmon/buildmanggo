@@ -166,11 +166,16 @@ jobs:
         # the runner, so the runner's newer glibc cannot leak into packages.
         run: ./script/package-linux-container.sh ./script/package.sh ${{ matrix.formats }}
 
-      - name: Verify Linux installation isolation and ASR staging
+      - name: Verify Linux downloads, installation isolation and ASR staging
         if: runner.os == 'Linux'
         env:
           MANGGO_LINUX_BUILD_IMAGE: ${{ matrix.linux_build_image }}
-        run: ./script/package-linux-container.sh ctest --test-dir build/package -R '^Manggo(LinuxInstallLayout|AsrStaging)Tests$' --output-on-failure
+        run: |
+          ./script/package-linux-container.sh bash -e -c '
+            cmake -S . -B build/package -DBUILD_TESTING=ON
+            cmake --build build/package --config "$CONFIG" --target ManggoParallelDownloaderTests
+            ctest --test-dir build/package -R "^Manggo(ParallelDownloader|LinuxInstallLayout|AsrStaging)Tests$" --output-on-failure --no-tests=error
+          '
 
       - name: Verify Linux DEB runtime dependencies
         if: runner.os == 'Linux'
@@ -247,7 +252,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          & ctest --test-dir build/package -C $env:CONFIG -R '^ManggoUpdateServiceTests$' --output-on-failure
+          & cmake -S . -B build/package -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { throw 'Windows test configuration failed.' }
+          & cmake --build build/package --config $env:CONFIG --target ManggoUpdateServiceTests ManggoWindowsDeploymentProbe ManggoI18nTests
+          if ($LASTEXITCODE -ne 0) { throw 'Windows deployment test build failed.' }
+          & ctest --test-dir build/package -C $env:CONFIG -R '^ManggoUpdateServiceTests$' --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { throw 'Windows update launcher regression tests failed.' }
           $stagedApps = @(Get-ChildItem dist/packages/_CPack_Packages -Recurse -File -Filter Manggo.exe)
           if ($stagedApps.Count -ne 1) { throw "Expected one staged application." }
