@@ -18,7 +18,6 @@ env:
   CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
   MACOS_DEPS_CACHE_VERSION: v5
   CONFIG: Release
-  CMAKE_BUILD_PARALLEL_LEVEL: 4
 
 jobs:
   package:
@@ -67,6 +66,17 @@ jobs:
         with:
           repository: Pylogmon/Manggo
           token: ${{ secrets.TOKEN }}
+
+      - name: Configure build parallelism
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) jobs="$NUMBER_OF_PROCESSORS" ;;
+            macOS) jobs="$(sysctl -n hw.logicalcpu)" ;;
+            Linux) jobs="$(nproc)" ;;
+          esac
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=$jobs" >> "$GITHUB_ENV"
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -257,7 +267,7 @@ jobs:
           & cmake --build build/package --config $env:CONFIG --target ManggoUpdateServiceTests ManggoWindowsDeploymentProbe ManggoI18nTests
           if ($LASTEXITCODE -ne 0) { throw 'Windows deployment test build failed.' }
           & ctest --test-dir build/package -C $env:CONFIG -R '^ManggoUpdateServiceTests$' --output-on-failure --no-tests=error
-          if ($LASTEXITCODE -ne 0) { throw 'Windows update launcher regression tests failed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Windows update service regression tests failed.' }
           $stagedApps = @(Get-ChildItem dist/packages/_CPack_Packages -Recurse -File -Filter Manggo.exe)
           if ($stagedApps.Count -ne 1) { throw "Expected one staged application." }
           $stagedBin = $stagedApps[0].DirectoryName
