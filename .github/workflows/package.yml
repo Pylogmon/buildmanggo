@@ -94,6 +94,7 @@ jobs:
           path: |
             dist/desktop/${{ matrix.os }}-*/manggo-*
             dist/desktop/${{ matrix.os }}-*/manggo_*.deb
+            dist/desktop/${{ matrix.os }}-*/PKGBUILD
             dist/desktop/${{ matrix.os }}-*/install.sh
             dist/desktop/${{ matrix.os }}-*/install.ps1
             dist/desktop/${{ matrix.os }}-*/update-*.json
