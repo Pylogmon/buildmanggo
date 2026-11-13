@@ -33,7 +33,7 @@ jobs:
       matrix:
         include:
           - {os: darwin, runner: macos-latest}
-          - {os: linux, runner: macos-latest}
+          - {os: linux, runner: ubuntu-latest}
           - {os: windows, runner: windows-latest}
     defaults:
       run:
@@ -44,7 +44,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          repository: Pylogmon/Manggo
+          repository: Pylogmon/Manggo-mygo
           token: ${{ secrets.TOKEN }}
       - uses: actions/setup-go@v7
         with:
@@ -112,7 +112,7 @@ jobs:
   release:
     name: Verify and publish six-platform release
     needs: package
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: write
@@ -146,7 +146,7 @@ jobs:
           go run ./tools/release.go -version "$version" -targets darwin-amd64,darwin-arm64,windows-amd64,windows-arm64,linux-amd64,linux-arm64 "${options[@]}"
           printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
           cd "dist/releases/$version"
-          shasum -a 256 --check SHA256SUMS
+          sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
           name: manggo-${{ env.RELEASE_VERSION }}-release
