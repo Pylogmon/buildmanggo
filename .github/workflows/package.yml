@@ -1,305 +1,171 @@
-name: Package
+name: Package and release
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version, for example 1.0.0 or 1.0.0-rc.1 (manual runs upload artifacts only)'
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: package-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref }}-${{ inputs.version }}
+  cancel-in-progress: false
 
 env:
-  QT_VERSION: 6.9.3
-  OPENCV_VERSION: 4.10.0
-  ONNXRUNTIME_VERSION: 1.22.0
-  MACOSX_DEPLOYMENT_TARGET: "14.0"
-  CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
-  MACOS_DEPS_CACHE_VERSION: v5
-  CONFIG: Release
+  CGO_ENABLED: '0'
+  GOWORK: 'off'
+  GOFLAGS: -mod=readonly
+  RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
 
 jobs:
   package:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    name: Package ${{ matrix.os }} (amd64 + arm64)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Linux x64 packages
-            os: ubuntu-24.04
-            qt_host: linux
-            qt_arch: linux_gcc_64
-            onnxruntime_arch: x64
-            formats: deb rpm
-            # Packages accept the build image's glibc and newer releases.
-            linux_build_image: ubuntu:22.04
-            linux_deb_test_images: ubuntu:22.04 ubuntu:24.04
-            artifact_name: Manggo-linux
-          - name: Linux ARM64 packages
-            os: ubuntu-24.04-arm
-            qt_host: linux_arm64
-            qt_arch: linux_gcc_arm64
-            onnxruntime_arch: aarch64
-            formats: deb rpm
-            # Qt's ARM64 binaries are built on Ubuntu 24.04 and need glibc 2.38.
-            linux_build_image: ubuntu:24.04
-            linux_deb_test_images: ubuntu:24.04
-            artifact_name: Manggo-linux-arm64
-          - name: Windows installer
-            os: windows-2022
-            formats: exe
-            artifact_name: Manggo-windows
-          - name: macOS Intel disk image
-            os: macos-15-intel
-            formats: dmg
-            artifact_name: Manggo-macos-intel
-          - name: macOS Apple Silicon disk image
-            os: macos-15
-            formats: dmg
-            artifact_name: Manggo-macos-apple-silicon
-
+          - {os: darwin, runner: macos-latest}
+          - {os: linux, runner: macos-latest}
+          - {os: windows, runner: windows-latest}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET_OS: ${{ matrix.os }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           repository: Pylogmon/Manggo
           token: ${{ secrets.TOKEN }}
-
-      - name: Configure build parallelism
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Windows) jobs="$NUMBER_OF_PROCESSORS" ;;
-            macOS) jobs="$(sysctl -n hw.logicalcpu)" ;;
-            Linux) jobs="$(nproc)" ;;
-          esac
-          echo "CMAKE_BUILD_PARALLEL_LEVEL=$jobs" >> "$GITHUB_ENV"
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+      - uses: actions/setup-go@v7
         with:
-          version: ${{ env.QT_VERSION }}
-          host: ${{ matrix.qt_host }}
-          arch: ${{ matrix.qt_arch }}
-          # Qt 6.9 includes qtwayland in the base Linux SDK, not as an aqt add-on.
-          modules: qtmultimedia qtwebsockets
-          cache: true
-          cache-key-prefix: install-qt-action-multimedia-websockets-v4
-
-      - name: Cache macOS Paddle OCR dependencies
-        if: runner.os == 'macOS'
-        uses: actions/cache@v6
-        with:
-          path: .deps/macos/${{ runner.arch }}
-          key: macos-paddle-ocr-${{ runner.os }}-${{ runner.arch }}-target-${{ env.MACOSX_DEPLOYMENT_TARGET }}-opencv-${{ env.OPENCV_VERSION }}-onnxruntime-${{ env.ONNXRUNTIME_VERSION }}-${{ env.MACOS_DEPS_CACHE_VERSION }}
-
-      - name: Cache Linux static OpenCV
-        if: runner.os == 'Linux'
-        uses: actions/cache@v6
-        with:
-          path: build/deps/linux-opencv
-          key: linux-opencv-${{ matrix.linux_build_image }}-${{ runner.arch }}-${{ env.OPENCV_VERSION }}-${{ hashFiles('script/install-linux-opencv.sh', 'tests/OpenCVStaticProbe/**') }}
-
-      - name: Install Linux ONNX Runtime
-        if: runner.os == 'Linux'
-        shell: bash
+          go-version-file: go.mod
+      - name: Import macOS certificate and notary credentials
+        if: matrix.os == 'darwin'
         env:
-          ONNXRUNTIME_ARCH: ${{ matrix.onnxruntime_arch }}
-        run: |
-          set -euo pipefail
-
-          onnxruntime_root="${GITHUB_WORKSPACE}/.deps/onnxruntime"
-          onnxruntime_archive="${RUNNER_TEMP}/onnxruntime-linux-${ONNXRUNTIME_ARCH}.tgz"
-          onnxruntime_url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}.tgz"
-
-          mkdir -p "${onnxruntime_root}"
-          curl --location --fail --retry 3 --output "${onnxruntime_archive}" "${onnxruntime_url}"
-          tar -xzf "${onnxruntime_archive}" --strip-components=1 -C "${onnxruntime_root}"
-
-          echo "${onnxruntime_root}/lib" >> "${GITHUB_PATH}"
-          {
-            echo "CMAKE_PREFIX_PATH=${onnxruntime_root}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
-            echo "LD_LIBRARY_PATH=${onnxruntime_root}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-          } >> "${GITHUB_ENV}"
-
-      - name: Install Windows packaging dependencies
-        if: runner.os == 'Windows'
-        run: choco install nsis -y --no-progress
-
-      - name: Cache Windows static OpenCV
-        if: runner.os == 'Windows'
-        uses: actions/cache@v6
-        with:
-          path: build/deps/windows-opencv
-          key: windows-opencv-windows-2022-${{ runner.arch }}-${{ env.OPENCV_VERSION }}-${{ hashFiles('script/install-windows-opencv.ps1', 'tests/OpenCVStaticProbe/**') }}
-
-      - name: Install Windows ONNX Runtime
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $onnxRuntimeRoot = Join-Path $env:GITHUB_WORKSPACE ".deps\onnxruntime"
-          $onnxRuntimeArchive = Join-Path $env:RUNNER_TEMP "onnxruntime-win-x64.zip"
-          $onnxRuntimeUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$env:ONNXRUNTIME_VERSION/onnxruntime-win-x64-$env:ONNXRUNTIME_VERSION.zip"
-
-          New-Item -ItemType Directory -Force -Path $onnxRuntimeRoot | Out-Null
-          curl.exe --location --fail --retry 3 --output $onnxRuntimeArchive $onnxRuntimeUrl
-          Expand-Archive -Path $onnxRuntimeArchive -DestinationPath $env:RUNNER_TEMP -Force
-
-          $expandedRoot = Get-ChildItem -Path $env:RUNNER_TEMP -Directory |
-            Where-Object { $_.Name -like "onnxruntime-win-x64-*" } |
-            Select-Object -First 1
-          if (-not $expandedRoot) {
-            throw "ONNX Runtime archive did not contain the expected root directory."
-          }
-
-          Copy-Item -Path (Join-Path $expandedRoot.FullName "*") -Destination $onnxRuntimeRoot -Recurse -Force
-
-          "CMAKE_PREFIX_PATH=$onnxRuntimeRoot;$env:CMAKE_PREFIX_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
-          (Join-Path $onnxRuntimeRoot "lib") | Out-File -FilePath $env:GITHUB_PATH -Append
-
-      - name: Install macOS Paddle OCR dependencies
-        if: runner.os == 'macOS'
-        shell: bash
-        run: ./script/install-macos-deps.sh
-
-      - name: Package Linux artifact
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          BUILD_DIR: ${{ github.workspace }}/build/package
-          PACKAGE_DIR: ${{ github.workspace }}/dist/packages
-          MANGGO_LINUX_BUILD_IMAGE: ${{ matrix.linux_build_image }}
-        # The toolchain and system libraries come from the build image, not
-        # the runner, so the runner's newer glibc cannot leak into packages.
-        run: ./script/package-linux-container.sh ./script/package.sh ${{ matrix.formats }}
-
-      - name: Verify Linux UI, downloads, installation isolation and ASR staging
-        if: runner.os == 'Linux'
-        env:
-          MANGGO_LINUX_BUILD_IMAGE: ${{ matrix.linux_build_image }}
-        run: |
-          ./script/package-linux-container.sh bash -e -c '
-            cmake -S . -B build/package -DBUILD_TESTING=ON
-            cmake --build build/package --config "$CONFIG" --target ManggoParallelDownloaderTests ManggoUiComponentsTests
-            ctest --test-dir build/package -R "^Manggo(ParallelDownloader|UiComponents|LinuxInstallLayout|AsrStaging)Tests$" --output-on-failure --no-tests=error
-          '
-
-      - name: Verify Linux DEB runtime dependencies
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          DEB_TEST_IMAGES: ${{ matrix.linux_deb_test_images }}
-        run: |
-          # Fresh images cannot borrow OpenCV or Qt from the build runner. The
-          # oldest image also proves that the package accepts its glibc.
-          for image in ${DEB_TEST_IMAGES}; do
-            echo "::group::${image}"
-            docker run --rm \
-              --volume "${GITHUB_WORKSPACE}/dist/packages:/packages:ro" \
-              --volume "${GITHUB_WORKSPACE}/script/verify-linux-package.sh:/verify-linux-package.sh:ro" \
-              "${image}" bash -euo pipefail -c '
-                apt-get update
-                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /packages/*.deb
-                bash /verify-linux-package.sh deb
-              '
-            echo "::endgroup::"
-          done
-
-      - name: Verify Linux RPM on Fedora 44
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          docker run --rm \
-            --volume "${GITHUB_WORKSPACE}/dist/packages:/packages:ro" \
-            --volume "${GITHUB_WORKSPACE}/script/verify-linux-package.sh:/verify-linux-package.sh:ro" \
-            fedora:44 bash -euo pipefail -c '
-              dnf install -y --setopt=install_weak_deps=False /packages/*.rpm
-              bash /verify-linux-package.sh rpm
-            '
-
-      - name: Package macOS artifact
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          BUILD_DIR: ${{ github.workspace }}/build/package
-          PACKAGE_DIR: ${{ github.workspace }}/dist/packages
-          MANGGO_MACOS_SIGN_IDENTITY: ${{ secrets.MANGGO_MACOS_SIGN_IDENTITY }}
           MANGGO_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MANGGO_MACOS_CERTIFICATE_P12_BASE64 }}
           MANGGO_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MANGGO_MACOS_CERTIFICATE_PASSWORD }}
-          MANGGO_MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MANGGO_MACOS_KEYCHAIN_PASSWORD }}
-          MANGGO_MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MANGGO_MACOS_NOTARY_KEY_P8_BASE64 }}
-          MANGGO_MACOS_NOTARY_KEY_ID: ${{ secrets.MANGGO_MACOS_NOTARY_KEY_ID }}
-          MANGGO_MACOS_NOTARY_ISSUER_ID: ${{ secrets.MANGGO_MACOS_NOTARY_ISSUER_ID }}
+          MANGGO_MACOS_SIGN_IDENTITY: ${{ secrets.MANGGO_MACOS_SIGN_IDENTITY }}
           MANGGO_MACOS_NOTARY_APPLE_ID: ${{ secrets.MANGGO_MACOS_NOTARY_APPLE_ID }}
           MANGGO_MACOS_NOTARY_PASSWORD: ${{ secrets.MANGGO_MACOS_NOTARY_PASSWORD }}
           MANGGO_MACOS_NOTARY_TEAM_ID: ${{ secrets.MANGGO_MACOS_NOTARY_TEAM_ID }}
-        run: ./script/package.sh ${{ matrix.formats }}
-
-      - name: Verify macOS architecture packaging
-        if: runner.os == 'macOS'
-        shell: bash
-        run: cmake -DMANGGO_TEST_BINARY_DIR="${GITHUB_WORKSPACE}/build/macos-package-tests" -P cmake/macos/tests/ThinBundleArchitecturesTest.cmake
-
-      - name: Verify macOS UI components
-        if: runner.os == 'macOS'
-        shell: bash
         run: |
-          cmake -S . -B build/package -DBUILD_TESTING=ON
-          cmake --build build/package --config "$CONFIG" --target ManggoUiComponentsTests
-          ctest --test-dir build/package -R '^ManggoUiComponentsTests$' --output-on-failure --no-tests=error
-
-      - name: Verify macOS deployment target
-        if: runner.os == 'macOS'
-        shell: bash
+          umask 077
+          keychain="$RUNNER_TEMP/manggo-signing.keychain-db"
+          certificate="$RUNNER_TEMP/manggo-signing.p12"
+          password="$(openssl rand -hex 32)"
+          printf '::add-mask::%s\n' "$password"
+          printf '%s' "$MANGGO_MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -P "$MANGGO_MACOS_CERTIFICATE_PASSWORD" \
+            -t cert -f pkcs12 -k "$keychain" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          xcrun notarytool store-credentials manggo-notary --keychain "$keychain" \
+            --apple-id "$MANGGO_MACOS_NOTARY_APPLE_ID" --password "$MANGGO_MACOS_NOTARY_PASSWORD" \
+            --team-id "$MANGGO_MACOS_NOTARY_TEAM_ID" > /dev/null
+          rm -f "$certificate"
+          printf 'MANGGO_MACOS_SIGN_IDENTITY=%s\nMANGGO_MACOS_NOTARY_PROFILE=manggo-notary\nMANGGO_MACOS_NOTARY_KEYCHAIN=%s\n' \
+            "$MANGGO_MACOS_SIGN_IDENTITY" "$keychain" >> "$GITHUB_ENV"
+      - name: Build installers, workers and separate AAC relink kit
         env:
-          BUILD_DIR: ${{ github.workspace }}/build/package
-        run: ./script/verify-macos-deployment-target.sh "${MACOSX_DEPLOYMENT_TARGET}"
-
-      - name: Package Windows artifact
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          BUILD_DIR: ${{ github.workspace }}\build\package
-          PACKAGE_DIR: ${{ github.workspace }}\dist\packages
-        run: .\script\package.ps1 ${{ matrix.formats }}
-
-      - name: Verify Windows deployment
-        if: runner.os == 'Windows'
-        shell: pwsh
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
         run: |
-          & cmake -S . -B build/package -DBUILD_TESTING=ON
-          if ($LASTEXITCODE -ne 0) { throw 'Windows test configuration failed.' }
-          & cmake --build build/package --config $env:CONFIG --target ManggoUpdateServiceTests ManggoWindowsDeploymentProbe ManggoI18nTests ManggoUiComponentsTests
-          if ($LASTEXITCODE -ne 0) { throw 'Windows deployment test build failed.' }
-          & ctest --test-dir build/package -C $env:CONFIG -R '^Manggo(UpdateService|UiComponents)Tests$' --output-on-failure --no-tests=error
-          if ($LASTEXITCODE -ne 0) { throw 'Windows update service or UI component regression tests failed.' }
-          $stagedApps = @(Get-ChildItem dist/packages/_CPack_Packages -Recurse -File -Filter Manggo.exe)
-          if ($stagedApps.Count -ne 1) { throw "Expected one staged application." }
-          $stagedBin = $stagedApps[0].DirectoryName
-          foreach ($testName in @('ManggoWindowsDeploymentProbe', 'ManggoI18nTests')) {
-            $probes = @(Get-ChildItem build/package -Recurse -File -Filter "$testName.exe")
-            if ($probes.Count -ne 1) { throw "Expected one $testName executable." }
-            & ./tests/WindowsDeploymentProbe/Run-StagedProbe.ps1 -Probe $probes[0].FullName -StagedBin $stagedBin -Ocr:($testName -eq 'ManggoWindowsDeploymentProbe')
-          }
-
-      - name: Write package metadata
-        run: cmake -P script/write-package-metadata.cmake
-
-      - name: Upload packages
-        uses: actions/upload-artifact@v7
+          for arch in amd64 arm64; do
+            go run ./tools/build.go package -os "$TARGET_OS" -arch "$arch" \
+              -version "${RELEASE_VERSION#v}" -commit "$GITHUB_SHA"
+          done
+      - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact_name }}
+          name: package-${{ matrix.os }}
+          # Preserve MyGo's original per-target catalogue for the final
+          # assembler. Raw app bundles/executables are kept out of artifacts.
           path: |
-            dist/packages/*.deb
-            dist/packages/*.dmg
-            dist/packages/*.exe
-            dist/packages/*.rpm
-            dist/packages/SHA256SUMS
-            dist/packages/SIZES
-            dist/packages/package-metadata.json
+            dist/desktop/${{ matrix.os }}-*/manggo-*
+            dist/desktop/${{ matrix.os }}-*/manggo_*.deb
+            dist/desktop/${{ matrix.os }}-*/install.sh
+            dist/desktop/${{ matrix.os }}-*/install.ps1
+            dist/desktop/${{ matrix.os }}-*/update-*.json
+            dist/desktop/${{ matrix.os }}-*/SHA256SUMS
           if-no-files-found: error
           compression-level: 0
-          retention-days: 14
+          retention-days: 30
+      - name: Remove macOS signing credentials
+        if: ${{ always() && matrix.os == 'darwin' }}
+        run: |
+          keychain="$RUNNER_TEMP/manggo-signing.keychain-db"
+          if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
+          rm -f "$RUNNER_TEMP/manggo-signing.p12"
+
+  release:
+    name: Verify and publish six-platform release
+    needs: package
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      INSTALLERS_ONLY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY == '' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          repository: Pylogmon/Manggo-mygo
+          token: ${{ secrets.TOKEN }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          path: dist/downloads
+      - name: Restore target catalogues and assemble release
+        shell: bash
+        run: |
+          version="${RELEASE_VERSION#v}"
+          mkdir -p dist/desktop
+          for target in darwin-amd64 darwin-arm64 windows-amd64 windows-arm64 linux-amd64 linux-arm64; do
+            mv "dist/downloads/package-${target%-*}/$target" "dist/desktop/$target"
+          done
+          options=()
+          if [[ "$INSTALLERS_ONLY" == true ]]; then
+            options+=(-installers-only)
+          fi
+          go run ./tools/release.go -version "$version" -targets darwin-amd64,darwin-arm64,windows-amd64,windows-arm64,linux-amd64,linux-arm64 "${options[@]}"
+          printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          cd "dist/releases/$version"
+          shasum -a 256 --check SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: manggo-${{ env.RELEASE_VERSION }}-release
+          path: dist/releases/${{ env.RELEASE_VERSION }}/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Publish packages, relink kits and checksums
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd "dist/releases/$RELEASE_VERSION"
+          options=()
+          if [[ "${RELEASE_VERSION%%+*}" == *-* ]]; then
+            options+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" ./* --draft --verify-tag --title "Manggo $RELEASE_VERSION" --generate-notes "${options[@]}"
+          gh release edit "$RELEASE_TAG" --draft=false
