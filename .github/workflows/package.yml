@@ -1,14 +1,16 @@
 name: Package and release
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Package version, for example 1.0.0 or 1.0.0-rc.1 (manual runs upload artifacts only)'
+        description: 'Version for the draft release, for example 1.0.0 or 1.0.0-rc.1'
         required: true
         type: string
+      skip_notarize:
+        description: 'Skip Apple notarization for testing (keeps code signing)'
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -17,156 +19,34 @@ concurrency:
   group: release-${{ github.ref }}-${{ inputs.version }}
   cancel-in-progress: false
 
-env:
-  CGO_ENABLED: '0'
-  GOWORK: 'off'
-  GOFLAGS: -mod=readonly
-  RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
-
 jobs:
-  package:
-    name: Package ${{ matrix.os }} (amd64 + arm64)
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {os: darwin, runner: macos-latest}
-          - {os: linux, runner: ubuntu-latest}
-          - {os: windows, runner: windows-latest}
-    defaults:
-      run:
-        shell: bash
-    env:
-      TARGET_OS: ${{ matrix.os }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          repository: Pylogmon/Manggo-mygo
-          token: ${{ secrets.TOKEN }}
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: Import macOS certificate and notary credentials
-        if: matrix.os == 'darwin'
-        env:
-          MANGGO_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MANGGO_MACOS_CERTIFICATE_P12_BASE64 }}
-          MANGGO_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MANGGO_MACOS_CERTIFICATE_PASSWORD }}
-          MANGGO_MACOS_SIGN_IDENTITY: ${{ secrets.MANGGO_MACOS_SIGN_IDENTITY }}
-          MANGGO_MACOS_NOTARY_APPLE_ID: ${{ secrets.MANGGO_MACOS_NOTARY_APPLE_ID }}
-          MANGGO_MACOS_NOTARY_PASSWORD: ${{ secrets.MANGGO_MACOS_NOTARY_PASSWORD }}
-          MANGGO_MACOS_NOTARY_TEAM_ID: ${{ secrets.MANGGO_MACOS_NOTARY_TEAM_ID }}
-        run: |
-          umask 077
-          keychain="$RUNNER_TEMP/manggo-signing.keychain-db"
-          certificate="$RUNNER_TEMP/manggo-signing.p12"
-          password="$(openssl rand -hex 32)"
-          printf '::add-mask::%s\n' "$password"
-          printf '%s' "$MANGGO_MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security import "$certificate" -P "$MANGGO_MACOS_CERTIFICATE_PASSWORD" \
-            -t cert -f pkcs12 -k "$keychain" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
-          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
-          xcrun notarytool store-credentials manggo-notary --keychain "$keychain" \
-            --apple-id "$MANGGO_MACOS_NOTARY_APPLE_ID" --password "$MANGGO_MACOS_NOTARY_PASSWORD" \
-            --team-id "$MANGGO_MACOS_NOTARY_TEAM_ID" > /dev/null
-          rm -f "$certificate"
-          printf 'MANGGO_MACOS_SIGN_IDENTITY=%s\nMANGGO_MACOS_NOTARY_PROFILE=manggo-notary\nMANGGO_MACOS_NOTARY_KEYCHAIN=%s\n' \
-            "$MANGGO_MACOS_SIGN_IDENTITY" "$keychain" >> "$GITHUB_ENV"
-      - name: Build installers, workers and separate AAC relink kit
-        env:
-          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
-        run: |
-          for arch in amd64 arm64; do
-            go run ./tools/build.go package -os "$TARGET_OS" -arch "$arch" \
-              -version "${RELEASE_VERSION#v}" -commit "$GITHUB_SHA"
-          done
-      - uses: actions/upload-artifact@v7
-        with:
-          name: package-${{ matrix.os }}
-          # Preserve MyGo's original per-target catalogue for the final
-          # assembler. Raw app bundles/executables are kept out of artifacts.
-          path: |
-            dist/desktop/${{ matrix.os }}-*/manggo-*
-            dist/desktop/${{ matrix.os }}-*/manggo_*.deb
-            dist/desktop/${{ matrix.os }}-*/PKGBUILD
-            dist/desktop/${{ matrix.os }}-*/install.sh
-            dist/desktop/${{ matrix.os }}-*/install.ps1
-            dist/desktop/${{ matrix.os }}-*/update-*.json
-            dist/desktop/${{ matrix.os }}-*/SHA256SUMS
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Remove macOS signing credentials
-        if: ${{ always() && matrix.os == 'darwin' }}
-        run: |
-          keychain="$RUNNER_TEMP/manggo-signing.keychain-db"
-          if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
-          rm -f "$RUNNER_TEMP/manggo-signing.p12"
-
   release:
-    name: Verify and publish six-platform release
-    needs: package
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: Package all six platforms
+    runs-on: macos-latest
+    timeout-minutes: 180
     permissions:
       contents: write
     env:
-      INSTALLERS_ONLY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY == '' }}
+      CGO_ENABLED: '0'
+      GOWORK: 'off'
+      GOFLAGS: -mod=readonly
+      MANGGO_RELEASE_VERSION: ${{ inputs.version }}
+      MANGGO_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MANGGO_MACOS_CERTIFICATE_P12_BASE64 }}
+      MANGGO_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MANGGO_MACOS_CERTIFICATE_PASSWORD }}
+      MANGGO_MACOS_SIGN_IDENTITY: ${{ secrets.MANGGO_MACOS_SIGN_IDENTITY }}
+      MANGGO_MACOS_NOTARY_APPLE_ID: ${{ secrets.MANGGO_MACOS_NOTARY_APPLE_ID }}
+      MANGGO_MACOS_NOTARY_PASSWORD: ${{ secrets.MANGGO_MACOS_NOTARY_PASSWORD }}
+      MANGGO_MACOS_NOTARY_TEAM_ID: ${{ secrets.MANGGO_MACOS_NOTARY_TEAM_ID }}
+      MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: Pylogmon/Manggo-mygo
           token: ${{ secrets.TOKEN }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: package-*
-          path: dist/downloads
-      - name: Restore target catalogues and assemble release
-        shell: bash
-        run: |
-          version="${RELEASE_VERSION#v}"
-          mkdir -p dist/desktop
-          for target in darwin-amd64 darwin-arm64 windows-amd64 windows-arm64 linux-amd64 linux-arm64; do
-            mv "dist/downloads/package-${target%-*}/$target" "dist/desktop/$target"
-          done
-          options=()
-          if [[ "$INSTALLERS_ONLY" == true ]]; then
-            options+=(-installers-only)
-          fi
-          go run ./tools/release.go -version "$version" -targets darwin-amd64,darwin-arm64,windows-amd64,windows-arm64,linux-amd64,linux-arm64 "${options[@]}"
-          printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
-          cd "dist/releases/$version"
-          sha256sum --check SHA256SUMS
-      - uses: actions/upload-artifact@v7
-        with:
-          name: manggo-${{ env.RELEASE_VERSION }}-release
-          path: dist/releases/${{ env.RELEASE_VERSION }}/*
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-
-      - name: Publish packages, relink kits and checksums
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          cd "dist/releases/$RELEASE_VERSION"
-          options=()
-          if [[ "${RELEASE_VERSION%%+*}" == *-* ]]; then
-            options+=(--prerelease)
-          fi
-          gh release create "$RELEASE_TAG" ./* --draft --verify-tag --title "Manggo $RELEASE_VERSION" --generate-notes "${options[@]}"
-          gh release edit "$RELEASE_TAG" --draft=false
+      - name: Build, verify and upload draft release
+        run: go run ./tools/release.go -build -publish -skip-notarize=${{ inputs.skip_notarize || false }}
