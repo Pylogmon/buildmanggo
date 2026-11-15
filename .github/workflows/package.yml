@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: Pylogmon/Manggo-mygo
+          repository: Pylogmon/MangGo
           token: ${{ secrets.TOKEN }}
       - uses: actions/setup-go@v7
         with:
