@@ -40,6 +40,7 @@ jobs:
       MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      MANGGO_RELEASE_TARGET: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,4 +50,4 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build, verify and upload draft release
-        run: go run ./tools/release.go -build -publish -skip-notarize=${{ inputs.skip_notarize || false }}
+        run: go run ./tools/release.go -build -publish -release-target "$MANGGO_RELEASE_TARGET" -skip-notarize=${{ inputs.skip_notarize || false }}
