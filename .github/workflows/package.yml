@@ -30,7 +30,6 @@ jobs:
       CGO_ENABLED: '0'
       GOWORK: 'off'
       GOFLAGS: -mod=readonly
-      MANGGO_RELEASE_VERSION: ${{ inputs.version }}
       MANGGO_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MANGGO_MACOS_CERTIFICATE_P12_BASE64 }}
       MANGGO_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MANGGO_MACOS_CERTIFICATE_PASSWORD }}
       MANGGO_MACOS_SIGN_IDENTITY: ${{ secrets.MANGGO_MACOS_SIGN_IDENTITY }}
@@ -38,9 +37,6 @@ jobs:
       MANGGO_MACOS_NOTARY_PASSWORD: ${{ secrets.MANGGO_MACOS_NOTARY_PASSWORD }}
       MANGGO_MACOS_NOTARY_TEAM_ID: ${{ secrets.MANGGO_MACOS_NOTARY_TEAM_ID }}
       MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      MANGGO_RELEASE_TARGET: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,5 +45,22 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Build, verify and upload draft release
-        run: go run ./tools/release.go -build -publish -release-target "$MANGGO_RELEASE_TARGET" -skip-notarize=${{ inputs.skip_notarize || false }}
+      - name: Build release packages
+        id: build
+        run: go run ./tools/release.go -build -skip-notarize=${{ inputs.skip_notarize || false }} -version ${{ inputs.version }}
+      - name: Upload draft release
+        uses: softprops/action-gh-release@v3
+        with:
+          repository: ${{ github.repository }}
+          tag_name: v${{ inputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Manggo ${{ inputs.version }}
+          draft: true
+          files: |
+            dist/releases/${{ inputs.version }}/*.dmg
+            dist/releases/${{ inputs.version }}/*.tar.gz
+            dist/releases/${{ inputs.version }}/*.json
+            dist/releases/${{ inputs.version }}/manggo-setup-*.exe
+            dist/releases/${{ inputs.version }}/*.delta
+            dist/releases/${{ inputs.version }}/*.deb
+            dist/releases/${{ inputs.version }}/*.rpm
